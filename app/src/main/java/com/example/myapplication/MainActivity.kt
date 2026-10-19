@@ -68,6 +68,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var zoomSeekBar: SeekBar
     private lateinit var torchButton: ToggleButton
 
+    // 가격 포지션 및 유사 제품 비교 UI
+    private lateinit var linearPriceGraphView: LinearPriceGraphView
+    private lateinit var priceBadgeTextView: TextView
+    private lateinit var compareDetailButton: Button
+    private lateinit var priceCardLayout: LinearLayout
+
+    private lateinit var comparisonContainer: FrameLayout
+    private lateinit var comparisonTitleTextView: TextView
+    private lateinit var comparisonItemsLayout: LinearLayout
+    private lateinit var backToResultButton: Button
+    private var lastPricePositionResult: PricePositionResult? = null
+
     // ========= 상태 =========
     private val REQUIRED_PERMISSION = Manifest.permission.CAMERA
     private lateinit var cameraExecutor: ExecutorService
@@ -364,11 +376,139 @@ class MainActivity : AppCompatActivity() {
         resultLayout.addView(summaryCardTextView)
         resultLayout.addView(ttsButton)
 
+        // ===== 시장 가격 포지션 분석 카드 =====
+        priceCardLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dpToPx(16)
+            }
+            setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
+            setBackgroundColor(0xFFF5F5F5.toInt())
+            visibility = View.GONE
+        }
+
+        val priceCardTitle = TextView(this).apply {
+            text = "📊 동급 종별 시장 가격 포지션 분석"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, 0, 0, dpToPx(8))
+        }
+
+        linearPriceGraphView = LinearPriceGraphView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(80)
+            )
+        }
+
+        priceBadgeTextView = TextView(this).apply {
+            text = "💰 동급 시장 가격 분석 중..."
+            textSize = 14f
+            setTextColor(0xFF2E7D32.toInt())
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, dpToPx(6), 0, dpToPx(8))
+        }
+
+        compareDetailButton = Button(this).apply {
+            text = "🔍 동급 유사 제품군 가격 비교 (자세히 보기) ➔"
+            textSize = 14f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        compareDetailButton.setOnClickListener {
+            showComparisonPage()
+        }
+
+        priceCardLayout.addView(priceCardTitle)
+        priceCardLayout.addView(linearPriceGraphView)
+        priceCardLayout.addView(priceBadgeTextView)
+        priceCardLayout.addView(compareDetailButton)
+
+        resultLayout.addView(priceCardLayout)
+
         resultScrollView.addView(resultLayout)
         resultContainer.addView(resultScrollView)
 
+        // ===== 전용 유사 제품군 가격 비교 화면 =====
+        comparisonContainer = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(0xFFFFFFFF.toInt())
+            visibility = View.GONE
+        }
+
+        val compScrollView = ScrollView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+        }
+
+        val compLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            setPadding(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16))
+        }
+
+        val compHeaderRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(16)
+            }
+        }
+
+        backToResultButton = Button(this).apply {
+            text = "← 이전 페이지로 돌아가기"
+            textSize = 14f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        backToResultButton.setOnClickListener {
+            showResultScreenFromComparison()
+        }
+
+        comparisonTitleTextView = TextView(this).apply {
+            text = "📊 동급 유사 제품군 시장 가격 비교"
+            textSize = 16f
+            setTypeface(null, Typeface.BOLD)
+            setPadding(dpToPx(12), 0, 0, 0)
+        }
+
+        compHeaderRow.addView(backToResultButton)
+        compHeaderRow.addView(comparisonTitleTextView)
+
+        comparisonItemsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        compLayout.addView(compHeaderRow)
+        compLayout.addView(comparisonItemsLayout)
+        compScrollView.addView(compLayout)
+        comparisonContainer.addView(compScrollView)
+
         rootLayout.addView(cameraContainer)
         rootLayout.addView(resultContainer)
+        rootLayout.addView(comparisonContainer)
 
         // TTS 초기화
         tts = TextToSpeech(this) { status ->
@@ -1148,6 +1288,15 @@ class MainActivity : AppCompatActivity() {
                     summaryCardTextView.text = summaryText
                 }
 
+                if (firstDataRow != null) {
+                    val tds = firstDataRow.select("td")
+                    val type = tds.getOrNull(0)?.text()?.trim().orEmpty()
+                    val formMaterial = tds.getOrNull(2)?.text()?.trim().orEmpty()
+                    if (type.isNotBlank()) {
+                        updatePricePositionUI(type, formMaterial)
+                    }
+                }
+
             } catch (e: Exception) {
                 Log.e("KFI", "합격표시 조회 실패", e)
                 if (!isRetry) {
@@ -1180,9 +1329,115 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    private fun showComparisonPage() {
+        resultContainer.visibility = View.GONE
+        comparisonContainer.visibility = View.VISIBLE
+    }
+
+    private fun showResultScreenFromComparison() {
+        comparisonContainer.visibility = View.GONE
+        resultContainer.visibility = View.VISIBLE
+    }
+
+    private fun updatePricePositionUI(type: String, formMaterial: String) {
+        cameraExecutor.execute {
+            val priceResult = ShoppingPriceUtil.fetchMarketPrices(type, formMaterial)
+            lastPricePositionResult = priceResult
+
+            runOnUiThread {
+                if (priceResult != null) {
+                    priceCardLayout.visibility = View.VISIBLE
+
+                    val minStr = String.format("최저 %,d원", priceResult.minPrice)
+                    val maxStr = String.format("최고 %,d원", priceResult.maxPrice)
+                    val estStr = String.format("평균 %,d원", priceResult.estimatedPrice)
+
+                    linearPriceGraphView.setPriceData(minStr, maxStr, estStr, priceResult.positionPercent)
+                    priceBadgeTextView.text = "💰 동급 [$type] 대비 [${priceResult.positionBadge}] 포지션입니다."
+
+                    comparisonTitleTextView.text = "📊 [$type] 동급 유사 제품군 시장 가격 비교"
+
+                    comparisonItemsLayout.removeAllViews()
+                    for ((index, prod) in priceResult.products.withIndex()) {
+                        val itemCard = LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            setPadding(dpToPx(12), dpToPx(12), dpToPx(12), dpToPx(12))
+                            setBackgroundColor(0xFFF9F9F9.toInt())
+                            layoutParams = LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT
+                            ).apply {
+                                bottomMargin = dpToPx(10)
+                            }
+                        }
+
+                        val titleTv = TextView(this).apply {
+                            text = "${index + 1}. ${prod.title}"
+                            textSize = 15f
+                            setTypeface(null, Typeface.BOLD)
+                            setTextColor(0xFF333333.toInt())
+                        }
+
+                        val infoRow = LinearLayout(this).apply {
+                            orientation = LinearLayout.HORIZONTAL
+                            setPadding(0, dpToPx(4), 0, 0)
+                        }
+
+                        val priceTv = TextView(this).apply {
+                            text = "가격: ${prod.formattedPrice}  |  제조/판매: ${prod.manufacturer}"
+                            textSize = 14f
+                            setTextColor(0xFF1976D2.toInt())
+                            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                        }
+
+                        val badgeTv = TextView(this).apply {
+                            text = prod.badge
+                            textSize = 12f
+                            setTextColor(0xFFFFFFFF.toInt())
+                            val badgeBg = when {
+                                prod.isExcellenceCertified -> 0xFFD84315.toInt() // 우수인증 금빛/주황
+                                prod.badge == "알뜰형" -> 0xFF2E7D32.toInt()
+                                else -> 0xFF1565C0.toInt()
+                            }
+                            setBackgroundColor(badgeBg)
+                            setPadding(dpToPx(8), dpToPx(3), dpToPx(8), dpToPx(3))
+                        }
+
+                        infoRow.addView(priceTv)
+                        infoRow.addView(badgeTv)
+
+                        itemCard.addView(titleTv)
+                        itemCard.addView(infoRow)
+
+                        if (prod.linkUrl.isNotBlank()) {
+                            itemCard.setOnClickListener {
+                                try {
+                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(prod.linkUrl))
+                                    startActivity(intent)
+                                } catch (_: Exception) {}
+                            }
+                        }
+
+                        comparisonItemsLayout.addView(itemCard)
+                    }
+
+                    // 투명한 품질 안내 문구 명시 (Disclaimer)
+                    val disclaimerTv = TextView(this).apply {
+                        text = priceResult.disclaimer
+                        textSize = 12f
+                        setTextColor(0xFF757575.toInt())
+                        setPadding(0, dpToPx(16), 0, dpToPx(16))
+                    }
+                    comparisonItemsLayout.addView(disclaimerTv)
+                }
+            }
+        }
+    }
+
     private fun showCameraScreen() {
         cameraContainer.visibility = View.VISIBLE
         resultContainer.visibility = View.GONE
+        comparisonContainer.visibility = View.GONE
 
         autoScanEnabled = true
         stableHitCount = 0
