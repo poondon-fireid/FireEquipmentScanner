@@ -1394,7 +1394,19 @@ class MainActivity : AppCompatActivity() {
 
                             val linkElem = tds.getOrNull(0)?.select("a")?.firstOrNull()
                                 ?: r.select("a").firstOrNull()
-                            val href = linkElem?.attr("abs:href").orEmpty()
+                            var href = linkElem?.attr("abs:href").orEmpty()
+
+                            if (href.isBlank() || href.contains("javascript")) {
+                                val rawHtml = r.html() + " " + (linkElem?.outerHtml() ?: "")
+                                val matches = Regex("['\"](\\d{6,8})['\"]").findAll(rawHtml).map { it.groupValues[1] }.toList()
+
+                                val rcptNo = matches.getOrNull(0).orEmpty()
+                                val ticCd = matches.getOrNull(1).orEmpty()
+
+                                if (rcptNo.isNotBlank()) {
+                                    href = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?searchGb=01&menuNo=500336&checkPurpose=009004&hisMode=Y&serMode=Y&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode&inspRcptNo=$rcptNo&ticWrtsCd=$ticCd"
+                                }
+                            }
 
                             dataRows.add(
                                 KfiMatchRow(
