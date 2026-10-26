@@ -1205,6 +1205,8 @@ class MainActivity : AppCompatActivity() {
         val type: String,
         val manufacturer: String,
         val formMaterial: String,
+        val inspRcptNo: String,
+        val ticWrtsCd: String,
         val detailUrl: String
     )
 
@@ -1216,20 +1218,48 @@ class MainActivity : AppCompatActivity() {
         val passDate: String
     )
 
-    private fun parseKfiDetailPage(detailUrl: String, fallbackType: String, fallbackManuf: String, fallbackSpec: String): KfiDetailInfo {
+    private fun parseKfiDetailPage(
+        letterCode: String,
+        numberCode: String,
+        inspRcptNo: String,
+        ticWrtsCd: String,
+        detailUrl: String,
+        fallbackType: String,
+        fallbackManuf: String,
+        fallbackSpec: String
+    ): KfiDetailInfo {
         var approvalNo = ""
         var passDate = ""
         var type = fallbackType
         var manuf = fallbackManuf
         var spec = fallbackSpec
 
-        if (detailUrl.isNotBlank()) {
-            try {
-                val doc = Jsoup.connect(detailUrl)
+        val url = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do"
+
+        try {
+            val doc = if (inspRcptNo.isNotBlank()) {
+                Jsoup.connect(url)
+                    .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
+                    .timeout(10_000)
+                    .data("searchGb", "01")
+                    .data("menuNo", "500336")
+                    .data("checkPurpose", "009004")
+                    .data("prfc", letterCode.lowercase())
+                    .data("psmrkNo", numberCode)
+                    .data("inspRcptNo", inspRcptNo)
+                    .data("ticWrtsCd", ticWrtsCd)
+                    .data("viewType", "view")
+                    .data("hisMode", "Y")
+                    .data("serMode", "Y")
+                    .post()
+            } else if (detailUrl.isNotBlank()) {
+                Jsoup.connect(detailUrl)
                     .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
                     .timeout(10_000)
                     .get()
+            } else null
 
+            if (doc != null) {
                 val rows = doc.select("tr")
                 for (row in rows) {
                     val label = row.select("th, td.lbl, td.th").text().trim()
@@ -1257,18 +1287,24 @@ class MainActivity : AppCompatActivity() {
                         if (value.isNotBlank()) spec = value
                     }
                 }
-            } catch (e: Exception) {
-                Log.e("KFI", "Detail page parse error", e)
             }
+        } catch (e: Exception) {
+            Log.e("KFI", "Detail page POST parse error", e)
         }
 
-        // 만약 웹 상세페이지 파싱값이 빈값인 경우 로컬 DB에서 매칭 시도
-        if (approvalNo.isBlank() || approvalNo == "-") {
-            try {
-                val db = AppDatabase.getDatabase(applicationContext)
-                approvalNo = ApprovalMatcher.findOfficialApprovalNo(db, manuf, type, spec)
-            } catch (_: Exception) {}
+        // KFI 웹상세 파싱 성공 시 무조건 웹상세의 형식승인번호를 그대로 100% 인용 사용!
+        if (approvalNo.isNotBlank() && approvalNo != "-") {
+            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
         }
+
+        // 파싱 실패/비어있는 예외 상황에서만 로컬 DB 비상 백업 사용
+        try {
+            val db = AppDatabase.getDatabase(applicationContext)
+            val fallbackApproval = ApprovalMatcher.findOfficialApprovalNo(db, manuf, type, spec)
+            if (fallbackApproval.isNotBlank() && !fallbackApproval.contains("매칭 데이터 없음")) {
+                approvalNo = fallbackApproval
+            }
+        } catch (_: Exception) {}
 
         if (approvalNo.isBlank()) {
             approvalNo = "공식 KFI 합격등록 완료"
@@ -1283,7 +1319,16 @@ class MainActivity : AppCompatActivity() {
         numberCode: String
     ) {
         cameraExecutor.execute {
-            val detailInfo = parseKfiDetailPage(row.detailUrl, row.type, row.manufacturer, row.formMaterial)
+            val detailInfo = parseKfiDetailPage(
+                letterCode,
+                numberCode,
+                row.inspRcptNo,
+                row.ticWrtsCd,
+                row.detailUrl,
+                row.type,
+                row.manufacturer,
+                row.formMaterial
+            )
 
             val type = detailInfo.type
             val manufacturer = detailInfo.manufacturer
@@ -1396,13 +1441,13 @@ class MainActivity : AppCompatActivity() {
                                 ?: r.select("a").firstOrNull()
                             var href = linkElem?.attr("abs:href").orEmpty()
 
+                            val rawHtml = r.html() + " " + (linkElem?.outerHtml() ?: "") + " " + r.attr("onclick")
+                            val matches = Regex("['\"](\\d{6,8})['\"]").findAll(rawHtml).map { it.groupValues[1] }.toList()
+
+                            val rcptNo = matches.getOrNull(0).orEmpty()
+                            val ticCd = matches.getOrNull(1).orEmpty()
+
                             if (href.isBlank() || href.contains("javascript")) {
-                                val rawHtml = r.html() + " " + (linkElem?.outerHtml() ?: "")
-                                val matches = Regex("['\"](\\d{6,8})['\"]").findAll(rawHtml).map { it.groupValues[1] }.toList()
-
-                                val rcptNo = matches.getOrNull(0).orEmpty()
-                                val ticCd = matches.getOrNull(1).orEmpty()
-
                                 if (rcptNo.isNotBlank()) {
                                     href = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?searchGb=01&menuNo=500336&checkPurpose=009004&hisMode=Y&serMode=Y&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode&inspRcptNo=$rcptNo&ticWrtsCd=$ticCd"
                                 }
@@ -1414,6 +1459,8 @@ class MainActivity : AppCompatActivity() {
                                     type = rowType,
                                     manufacturer = rowManuf,
                                     formMaterial = rowSpec,
+                                    inspRcptNo = rcptNo,
+                                    ticWrtsCd = ticCd,
                                     detailUrl = href
                                 )
                             )
