@@ -1217,48 +1217,64 @@ class MainActivity : AppCompatActivity() {
     )
 
     private fun parseKfiDetailPage(detailUrl: String, fallbackType: String, fallbackManuf: String, fallbackSpec: String): KfiDetailInfo {
-        if (detailUrl.isBlank()) {
-            return KfiDetailInfo(fallbackType, fallbackManuf, fallbackSpec, "공식 KFI 합격등록 완료", "")
-        }
-        try {
-            val doc = Jsoup.connect(detailUrl)
-                .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
-                .timeout(10_000)
-                .get()
+        var approvalNo = ""
+        var passDate = ""
+        var type = fallbackType
+        var manuf = fallbackManuf
+        var spec = fallbackSpec
 
-            var approvalNo = ""
-            var passDate = ""
-            var type = fallbackType
-            var manuf = fallbackManuf
-            var spec = fallbackSpec
+        if (detailUrl.isNotBlank()) {
+            try {
+                val doc = Jsoup.connect(detailUrl)
+                    .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
+                    .timeout(10_000)
+                    .get()
 
-            val ths = doc.select("th")
-            for (th in ths) {
-                val label = th.text().trim()
-                val td = th.nextElementSibling()?.text()?.trim() ?: continue
+                val rows = doc.select("tr")
+                for (row in rows) {
+                    val label = row.select("th, td.lbl, td.th").text().trim()
+                    val value = row.select("td").lastOrNull()?.text()?.trim() ?: continue
 
-                if (label.contains("형식승인") || label.contains("성능인증") || label.contains("KFI인증") || label.contains("승인번호")) {
-                    approvalNo = td
-                } else if (label.contains("검정일자") || label.contains("합격일자")) {
-                    passDate = td
-                } else if (label.contains("종별")) {
-                    if (td.isNotBlank()) type = td
-                } else if (label.contains("제조") || label.contains("업체")) {
-                    if (td.isNotBlank()) manuf = td
-                } else if (label.contains("형식") || label.contains("소재") || label.contains("규격")) {
-                    if (td.isNotBlank()) spec = td
+                    if (label.contains("승인번호") || label.contains("형식승인") || label.contains("성능인증") || label.contains("KFI인증")) {
+                        if (value.contains("/")) {
+                            val parts = value.split("/")
+                            approvalNo = parts[0].trim()
+                            if (passDate.isBlank() && parts.size >= 2) {
+                                passDate = parts[1].trim()
+                            }
+                        } else {
+                            approvalNo = value
+                        }
+                    } else if (label.contains("검정일자") || label.contains("합격일자") || label.contains("접수일자")) {
+                        if (passDate.isBlank()) {
+                            passDate = value
+                        }
+                    } else if (label.contains("종별")) {
+                        if (value.isNotBlank()) type = value
+                    } else if (label.contains("제조")) {
+                        if (value.isNotBlank()) manuf = value
+                    } else if (label.contains("형식명") || label.contains("형식 및 소재") || label.contains("규격")) {
+                        if (value.isNotBlank()) spec = value
+                    }
                 }
+            } catch (e: Exception) {
+                Log.e("KFI", "Detail page parse error", e)
             }
-
-            if (approvalNo.isBlank()) {
-                approvalNo = "공식 KFI 합격등록 완료"
-            }
-
-            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
-        } catch (e: Exception) {
-            Log.e("KFI", "Detail page parse error", e)
-            return KfiDetailInfo(fallbackType, fallbackManuf, fallbackSpec, "공식 KFI 합격등록 완료", "")
         }
+
+        // 만약 웹 상세페이지 파싱값이 빈값인 경우 로컬 DB에서 매칭 시도
+        if (approvalNo.isBlank() || approvalNo == "-") {
+            try {
+                val db = AppDatabase.getDatabase(applicationContext)
+                approvalNo = ApprovalMatcher.findOfficialApprovalNo(db, manuf, type, spec)
+            } catch (_: Exception) {}
+        }
+
+        if (approvalNo.isBlank()) {
+            approvalNo = "공식 KFI 합격등록 완료"
+        }
+
+        return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
     }
 
     private fun processKfiMatchedItem(
