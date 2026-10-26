@@ -1215,7 +1215,14 @@ class MainActivity : AppCompatActivity() {
         val manufacturer: String,
         val formMaterial: String,
         val officialApprovalNo: String,
-        val passDate: String
+        val passDate: String,
+        val inspectKind: String,     // 검사종류
+        val rcptInfo: String,        // 접수번호 및 접수일자
+        val inspectorInfo: String,   // 검사자 및 검사일자
+        val lotNumber: String,       // 로트번호 또는 제조번호
+        val inspectQty: String,      // 수량
+        val finalJudgment: String,   // 종합판정
+        val passNumber: String       // 합격번호
     )
 
     private fun parseKfiDetailPage(
@@ -1233,6 +1240,13 @@ class MainActivity : AppCompatActivity() {
         var type = fallbackType
         var manuf = fallbackManuf
         var spec = fallbackSpec
+        var inspectKind = ""
+        var rcptInfo = ""
+        var inspectorInfo = ""
+        var lotNumber = ""
+        var inspectQty = ""
+        var finalJudgment = ""
+        var passNumber = ""
 
         val url = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do"
 
@@ -1275,16 +1289,28 @@ class MainActivity : AppCompatActivity() {
                         } else {
                             approvalNo = value
                         }
-                    } else if (label.contains("검정일자") || label.contains("합격일자") || label.contains("접수일자")) {
-                        if (passDate.isBlank()) {
-                            passDate = value
-                        }
+                    } else if (label.contains("검정일자") || label.contains("합격일자")) {
+                        if (passDate.isBlank()) passDate = value
                     } else if (label.contains("종별")) {
                         if (value.isNotBlank()) type = value
                     } else if (label.contains("제조")) {
                         if (value.isNotBlank()) manuf = value
                     } else if (label.contains("형식명") || label.contains("형식 및 소재") || label.contains("규격")) {
                         if (value.isNotBlank()) spec = value
+                    } else if (label.contains("검사종류")) {
+                        if (value.isNotBlank()) inspectKind = value
+                    } else if (label.contains("접수번호")) {
+                        if (value.isNotBlank()) rcptInfo = value
+                    } else if (label.contains("검사자")) {
+                        if (value.isNotBlank()) inspectorInfo = value
+                    } else if (label.contains("로트번호") || label.contains("제조번호")) {
+                        if (value.isNotBlank() && !value.contains("한해")) lotNumber = value
+                    } else if (label.contains("수량")) {
+                        if (value.isNotBlank() && !value.contains("한해")) inspectQty = value
+                    } else if (label.contains("종합판정")) {
+                        if (value.isNotBlank()) finalJudgment = value
+                    } else if (label.contains("합격번호")) {
+                        if (value.isNotBlank() && !value.contains("한해")) passNumber = value
                     }
                 }
             }
@@ -1294,7 +1320,7 @@ class MainActivity : AppCompatActivity() {
 
         // KFI 웹상세 파싱 성공 시 무조건 웹상세의 형식승인번호를 그대로 100% 인용 사용!
         if (approvalNo.isNotBlank() && approvalNo != "-") {
-            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
+            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate, inspectKind, rcptInfo, inspectorInfo, lotNumber, inspectQty, finalJudgment, passNumber)
         }
 
         // 파싱 실패/비어있는 예외 상황에서만 로컬 DB 비상 백업 사용
@@ -1310,7 +1336,7 @@ class MainActivity : AppCompatActivity() {
             approvalNo = "공식 KFI 합격등록 완료"
         }
 
-        return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
+        return KfiDetailInfo(type, manuf, spec, approvalNo, passDate, inspectKind, rcptInfo, inspectorInfo, lotNumber, inspectQty, finalJudgment, passNumber)
     }
 
     private fun processKfiMatchedItem(
@@ -1356,14 +1382,25 @@ class MainActivity : AppCompatActivity() {
 
             val summaryText = buildString {
                 appendLine(judgmentHeader)
+                appendLine()
+                appendLine("[📦 KFI 제품 정보]")
                 appendLine("• 합격 표시: ${letterCode.uppercase()} $numberCode")
-                appendLine("• 형식승인번호: $officialApprovalNo")
-                if (passDate.isNotBlank()) {
-                    appendLine("• 검정합격일자: $passDate")
-                }
                 appendLine("• 종별: $type")
                 appendLine("• 제조업체: $manufacturer")
-                appendLine("• 형식 및 소재: $formMaterial")
+                appendLine("• 승인번호 및 승인일자: $officialApprovalNo${if (passDate.isNotBlank()) " / $passDate" else ""}")
+                appendLine("• 형식명: $formMaterial")
+
+                if (detailInfo.inspectKind.isNotBlank() || detailInfo.rcptInfo.isNotBlank() || detailInfo.inspectorInfo.isNotBlank() || detailInfo.lotNumber.isNotBlank() || detailInfo.passNumber.isNotBlank()) {
+                    appendLine()
+                    appendLine("[📋 KFI 검사 정보]")
+                    if (detailInfo.inspectKind.isNotBlank()) appendLine("• 검사종류: ${detailInfo.inspectKind}")
+                    if (detailInfo.rcptInfo.isNotBlank()) appendLine("• 접수번호 및 접수일자: ${detailInfo.rcptInfo}")
+                    if (detailInfo.inspectorInfo.isNotBlank()) appendLine("• 검사자 및 검사일자: ${detailInfo.inspectorInfo}")
+                    if (detailInfo.lotNumber.isNotBlank()) appendLine("• 로트/제조번호: ${detailInfo.lotNumber}")
+                    if (detailInfo.inspectQty.isNotBlank()) appendLine("• 검사수량: ${detailInfo.inspectQty}")
+                    if (detailInfo.passNumber.isNotBlank()) appendLine("• 방염합격번호: ${detailInfo.passNumber}")
+                    if (detailInfo.finalJudgment.isNotBlank()) appendLine("• KFI 종합판정: ${detailInfo.finalJudgment}")
+                }
             }.trim()
 
             // Room DB에 점검 이력 자동 저장
