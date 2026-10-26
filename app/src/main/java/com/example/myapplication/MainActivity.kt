@@ -1248,32 +1248,20 @@ class MainActivity : AppCompatActivity() {
         var finalJudgment = ""
         var passNumber = ""
 
-        val url = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do"
-
         try {
-            val doc = if (inspRcptNo.isNotBlank()) {
-                Jsoup.connect(url)
-                    .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
-                    .timeout(10_000)
-                    .data("searchGb", "01")
-                    .data("menuNo", "500336")
-                    .data("checkPurpose", "009004")
-                    .data("prfc", letterCode.lowercase())
-                    .data("psmrkNo", numberCode)
-                    .data("inspRcptNo", inspRcptNo)
-                    .data("ticWrtsCd", ticWrtsCd)
-                    .data("viewType", "view")
-                    .data("hisMode", "Y")
-                    .data("serMode", "Y")
-                    .post()
+            // 개발자도구 스크린샷 주소창에서 확인된 KFI 정식 상세 전용 엔드포인트(opnPsmrkDtl.do) 직접 호출
+            val dtlUrl = if (inspRcptNo.isNotBlank()) {
+                "https://www.kfi.or.kr/portal/openData/openData/opnPsmrkDtl.do?searchGb=01&menuNo=500336&inspRcptNo=$inspRcptNo&ticWrtsCd=$ticWrtsCd&hisMode=Y&serMode=Y&checkPurpose=009003&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode"
             } else if (detailUrl.isNotBlank()) {
-                Jsoup.connect(detailUrl)
-                    .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
-                    .timeout(10_000)
-                    .get()
-            } else null
+                detailUrl.replace("opnPsmrk.do", "opnPsmrkDtl.do")
+            } else ""
 
-            if (doc != null) {
+            if (dtlUrl.isNotBlank()) {
+                val doc = Jsoup.connect(dtlUrl)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .timeout(12_000)
+                    .get()
+
                 val rows = doc.select("tr")
                 for (row in rows) {
                     val label = row.select("th, td.lbl, td.th").text().trim()
@@ -1315,7 +1303,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("KFI", "Detail page POST parse error", e)
+            Log.e("KFI", "Detail page Dtl.do parse error", e)
         }
 
         // KFI 웹상세 파싱 성공 시 무조건 웹상세의 형식승인번호를 그대로 100% 인용 사용!
