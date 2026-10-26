@@ -1,6 +1,7 @@
 package com.example.myapplication
 
 import android.util.Log
+import org.json.JSONObject
 import org.jsoup.Jsoup
 import java.net.URLEncoder
 import java.util.Locale
@@ -24,7 +25,7 @@ data class PricePositionResult(
     val positionPercent: Int, // 0 ~ 100%
     val positionBadge: String,
     val products: List<ShoppingProduct>,
-    val disclaimer: String = "※ 본 가격 정보는 온라인 주요 유통 시장 판매가 기준 참고용이며, 제품의 품질 등급을 직접 보증하는 것은 아닙니다. 우수품질인증(🏅) 표시 제품은 한국소방산업기술원의 정밀 품질 검증을 통과한 우수 소방용품입니다."
+    val disclaimer: String = "※ 본 가격 정보는 네이버 쇼핑 실시간 유통가 기준 참고용이며, 제품의 품질 등급을 직접 보증하는 것은 아닙니다. 우수품질인증(🏅) 표시 제품은 한국소방산업기술원의 정밀 품질 검증을 통과한 우수 소방용품입니다."
 )
 
 object ShoppingPriceUtil {
@@ -40,11 +41,11 @@ object ShoppingPriceUtil {
     private fun getMinPriceThreshold(query: String): Int {
         return when {
             query.contains("소화기") -> 12_000
-            query.contains("감지기") -> 8_000
+            query.contains("감지기") -> 7_000
             query.contains("유도등") -> 18_000
             query.contains("발신기") -> 15_000
             query.contains("완강기") -> 45_000
-            else -> 8_000
+            else -> 7_000
         }
     }
 
@@ -54,58 +55,109 @@ object ShoppingPriceUtil {
             val cleanSpec = specKeyword.split(",").firstOrNull()?.trim() ?: ""
             val query = if (cleanSpec.isNotBlank()) "$cleanType $cleanSpec" else cleanType
 
-            Log.d("ShoppingPriceUtil", "Fetching 10 balanced shopping prices for query: '$query'")
+            Log.d("ShoppingPriceUtil", "Fetching live Naver Shopping JSON prices for query: '$query'")
 
             val encodedQuery = URLEncoder.encode(query, "UTF-8")
-            val searchUrl = "https://m.search.naver.com/search.naver?where=m_shopping&query=$encodedQuery"
-
-            val doc = Jsoup.connect(searchUrl)
-                .userAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
-                .timeout(12_000)
-                .get()
+            val apiUrl = "https://search.shopping.naver.com/api/search/all?query=$encodedQuery&pagingIndex=1&pagingSize=15"
 
             val rawProducts = mutableListOf<ShoppingProduct>()
             val minThreshold = getMinPriceThreshold(query)
 
-            // 쇼핑 검색 결과 항목 파싱
-            val items = doc.select(".sp_nshop, .api_ani_send, .shop_product, li")
-            for (item in items) {
-                val priceText = item.select(".price, .num, .price_num, strong").text()
-                val title = item.select(".name, .title, .product_title, a").firstOrNull()?.text()?.trim() ?: ""
+            try {
+                val jsonString = Jsoup.connect(apiUrl)
+                    .ignoreContentType(true)
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                    .referrer("https://search.shopping.naver.com/")
+                    .timeout(10_000)
+                    .execute()
+                    .body()
 
-                if (title.isBlank() || priceText.isBlank()) continue
+                val rootObj = JSONObject(jsonString)
+                val shoppingResult = rootObj.optJSONObject("shoppingResult")
+                val productsArray = shoppingResult?.optJSONArray("products")
 
-                // 1. 부속품/액세서리 잡음 100% 필터링 차단
-                if (isAccessoryOrNoise(title)) continue
+                if (productsArray != null) {
+                    for (i in 0 until productsArray.length()) {
+                        val pObj = productsArray.getJSONObject(i)
+                        val title = pObj.optString("productName", "").replace(Regex("<[^>]*>"), "").trim()
+                        val lpriceStr = pObj.optString("price", pObj.optString("lprice", "0"))
+                        val cleanPrice = lpriceStr.replace(Regex("[^0-9]"), "").toIntOrNull() ?: continue
+                        val mallName = pObj.optString("mallName", "네이버쇼핑")
+                        val crUrl = pObj.optString("crUrl", pObj.optString("link", ""))
 
-                val cleanPrice = priceText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: continue
+                        if (title.isBlank() || isAccessoryOrNoise(title)) continue
 
-                // 2. 종별 최저 본체 가격 하한선 적용 (액세서리 가격 왜곡 방지)
-                if (cleanPrice in minThreshold..2_000_000) {
-                    val linkUrl = item.select("a").firstOrNull()?.attr("abs:href") ?: ""
-                    val formattedPrice = String.format(Locale.KOREA, "%,d원", cleanPrice)
+                        if (cleanPrice in minThreshold..2_000_000) {
+                            val formattedPrice = String.format(Locale.KOREA, "%,d원", cleanPrice)
+                            val isExcellence = title.contains("우수") || title.contains("성능인증") || title.contains("품질인증")
+                            val badge = when {
+                                isExcellence -> "🏅 KFI 우수품질인증"
+                                cleanPrice < minThreshold * 1.5 -> "알뜰형"
+                                cleanPrice < minThreshold * 2.5 -> "평균가"
+                                else -> "고급형"
+                            }
 
-                    // 3. KFI 우수품질인증 배지 판별
-                    val isExcellence = title.contains("우수") || title.contains("성능인증") || title.contains("품질인증")
-                    val badge = when {
-                        isExcellence -> "🏅 KFI 우수품질인증"
-                        cleanPrice < minThreshold * 1.5 -> "알뜰형"
-                        cleanPrice < minThreshold * 2.5 -> "평균가"
-                        else -> "고급형"
+                            if (rawProducts.none { it.price == cleanPrice || it.title == title }) {
+                                rawProducts.add(
+                                    ShoppingProduct(
+                                        title = title.take(45),
+                                        price = cleanPrice,
+                                        formattedPrice = formattedPrice,
+                                        manufacturer = if (mallName.isNotBlank()) mallName else extractManufacturer(title),
+                                        linkUrl = crUrl,
+                                        badge = badge,
+                                        isExcellenceCertified = isExcellence
+                                    )
+                                )
+                            }
+                        }
                     }
+                }
+            } catch (e: Exception) {
+                Log.w("ShoppingPriceUtil", "JSON API fetch failed, falling back to HTML scraping", e)
+            }
 
-                    if (rawProducts.none { it.price == cleanPrice || it.title == title }) {
-                        rawProducts.add(
-                            ShoppingProduct(
-                                title = title.take(45),
-                                price = cleanPrice,
-                                formattedPrice = formattedPrice,
-                                manufacturer = extractManufacturer(title),
-                                linkUrl = linkUrl,
-                                badge = badge,
-                                isExcellenceCertified = isExcellence
+            // JSON 파싱 실패시 HTML 파싱 시도
+            if (rawProducts.isEmpty()) {
+                val searchUrl = "https://m.search.naver.com/search.naver?where=m_shopping&query=$encodedQuery"
+                val doc = Jsoup.connect(searchUrl)
+                    .userAgent("Mozilla/5.0 (Linux; Android 10; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36")
+                    .timeout(10_000)
+                    .get()
+
+                val items = doc.select(".sp_nshop, .api_ani_send, .shop_product, li")
+                for (item in items) {
+                    val priceText = item.select(".price, .num, .price_num, strong").text()
+                    val title = item.select(".name, .title, .product_title, a").firstOrNull()?.text()?.trim() ?: ""
+
+                    if (title.isBlank() || priceText.isBlank() || isAccessoryOrNoise(title)) continue
+
+                    val cleanPrice = priceText.replace(Regex("[^0-9]"), "").toIntOrNull() ?: continue
+
+                    if (cleanPrice in minThreshold..2_000_000) {
+                        val linkUrl = item.select("a").firstOrNull()?.attr("abs:href") ?: ""
+                        val formattedPrice = String.format(Locale.KOREA, "%,d원", cleanPrice)
+                        val isExcellence = title.contains("우수") || title.contains("성능인증") || title.contains("품질인증")
+                        val badge = when {
+                            isExcellence -> "🏅 KFI 우수품질인증"
+                            cleanPrice < minThreshold * 1.5 -> "알뜰형"
+                            cleanPrice < minThreshold * 2.5 -> "평균가"
+                            else -> "고급형"
+                        }
+
+                        if (rawProducts.none { it.price == cleanPrice || it.title == title }) {
+                            rawProducts.add(
+                                ShoppingProduct(
+                                    title = title.take(45),
+                                    price = cleanPrice,
+                                    formattedPrice = formattedPrice,
+                                    manufacturer = extractManufacturer(title),
+                                    linkUrl = linkUrl,
+                                    badge = badge,
+                                    isExcellenceCertified = isExcellence
+                                )
                             )
-                        )
+                        }
                     }
                 }
             }
@@ -114,32 +166,7 @@ object ShoppingPriceUtil {
                 return createFallbackPriceData(query)
             }
 
-            // 4. 3단계 가격대 균형 추출 (10개 샘플링: 알뜰형 3개 + 평균가 4개 + 프리미엄/우수인증 3개)
-            val sortedList = rawProducts.sortedBy { it.price }
-            val balanced10Products = mutableListOf<ShoppingProduct>()
-
-            if (sortedList.size <= 10) {
-                balanced10Products.addAll(sortedList)
-            } else {
-                val budgetItems = sortedList.take((sortedList.size * 0.3).toInt().coerceAtLeast(3))
-                val premiumItems = sortedList.takeLast((sortedList.size * 0.3).toInt().coerceAtLeast(3))
-                val middleItems = sortedList.subList(budgetItems.size, sortedList.size - premiumItems.size)
-
-                balanced10Products.addAll(budgetItems.take(3))
-                balanced10Products.addAll(middleItems.take(4))
-                balanced10Products.addAll(premiumItems.take(3))
-
-                if (balanced10Products.size < 10) {
-                    for (prod in sortedList) {
-                        if (!balanced10Products.contains(prod)) {
-                            balanced10Products.add(prod)
-                        }
-                        if (balanced10Products.size >= 10) break
-                    }
-                }
-            }
-
-            val finalSorted = balanced10Products.sortedBy { it.price }
+            val finalSorted = rawProducts.sortedBy { it.price }.take(10)
             val minPrice = finalSorted.first().price
             val maxPrice = finalSorted.last().price
             val avgPrice = (finalSorted.map { it.price }.average()).toInt()
@@ -182,7 +209,7 @@ object ShoppingPriceUtil {
     private fun createFallbackPriceData(query: String): PricePositionResult {
         val basePrice = when {
             query.contains("소화기") -> 21_000
-            query.contains("감지기") -> 12_500
+            query.contains("감지기") -> 10_900
             query.contains("유도등") -> 35_000
             query.contains("발신기") -> 28_000
             query.contains("완강기") -> 85_000
@@ -194,7 +221,7 @@ object ShoppingPriceUtil {
         val maxPrice = (basePrice * 1.50).toInt()
 
         val sampleList = mutableListOf<ShoppingProduct>()
-        val manufacturers = listOf("삼우소방", "동방전자", "리더스테크", "한국소화기", "파라텍", "신방소방", "지엠소방", "광명소방", "한창소방", "현대소방")
+        val manufacturers = listOf("리더스테크", "동방전자", "삼우소방", "한국소화기", "파라텍", "신방소방", "지엠소방", "광명소방", "한창소방", "현대소방")
 
         for (i in 0 until 10) {
             val stepPrice = minPrice + ((maxPrice - minPrice) * (i / 9.0)).toInt()

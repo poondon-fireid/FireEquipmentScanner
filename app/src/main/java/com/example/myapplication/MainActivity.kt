@@ -69,6 +69,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var torchButton: ToggleButton
 
     // 가격 포지션 및 유사 제품 비교 UI
+    private lateinit var kfiChipsHeaderTextView: TextView
+    private lateinit var kfiChipsLayout: LinearLayout
+
     private lateinit var linearPriceGraphView: LinearPriceGraphView
     private lateinit var priceBadgeTextView: TextView
     private lateinit var compareDetailButton: Button
@@ -371,7 +374,30 @@ class MainActivity : AppCompatActivity() {
             speakLastResult()
         }
 
+        // ===== KFI 중복 품목 선택 칩 UI =====
+        kfiChipsHeaderTextView = TextView(this).apply {
+            text = "⚠️ 본 합격표시로 여러 개의 KFI 등록 품목이 검색되었습니다. 점검 품목을 선택해 주세요:"
+            textSize = 14f
+            setTextColor(0xFFD84315.toInt())
+            setTypeface(null, Typeface.BOLD)
+            setPadding(0, dpToPx(8), 0, dpToPx(4))
+            visibility = View.GONE
+        }
+
+        kfiChipsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(8)
+            }
+            visibility = View.GONE
+        }
+
         resultLayout.addView(topRow)
+        resultLayout.addView(kfiChipsHeaderTextView)
+        resultLayout.addView(kfiChipsLayout)
         resultLayout.addView(summaryCardTitle)
         resultLayout.addView(summaryCardTextView)
         resultLayout.addView(ttsButton)
@@ -741,26 +767,31 @@ class MainActivity : AppCompatActivity() {
         val raw = s.uppercase().filter { it in 'A'..'Z' || it in '0'..'9' }
         if (raw.length != 4) return null
 
-        // 4글자 중 최소 3글자 이상이 보정 전 순수 영문(A-Z)이어야 인정 (숫자 및 잡음의 영문 강제변환 차단!)
+        val fixed = fixLetters(raw)
+        if (fixed.length != 4) return null
+
+        // OCR 오인식 숫자('1'->'I', '0'->'O', '5'->'S', '8'->'B', '2'->'Z') 사전 허용 보정
         val pureLetters = raw.count { it in 'A'..'Z' }
-        if (pureLetters < 3) {
+        val confusableDigits = raw.count { it in listOf('1', '0', '5', '8', '2') }
+        if (pureLetters + confusableDigits < 3) {
             return null
         }
-        val fixed = fixLetters(raw)
-        return if (fixed.length == 4) fixed else null
+        return fixed
     }
 
     private fun extractCleanDigits(s: String): String? {
         val raw = s.uppercase().filter { it in 'A'..'Z' || it in '0'..'9' }
         if (raw.length != 5) return null
 
-        // 5글자 중 최소 4글자 이상이 보정 전 순수 숫자(0-9)이어야 인정 (영문 및 잡음의 숫자 강제변환 차단!)
+        val fixed = fixDigits(raw)
+        if (fixed.length != 5) return null
+
         val pureDigits = raw.count { it in '0'..'9' }
-        if (pureDigits < 4) {
+        val confusableLetters = raw.count { it in listOf('O', 'Q', 'I', 'L', '|', 'Z', 'S', 'B', 'G', 'T') }
+        if (pureDigits + confusableLetters < 4) {
             return null
         }
-        val fixed = fixDigits(raw)
-        return if (fixed.length == 5) fixed else null
+        return fixed
     }
 
     private fun parseStickerCodeFromString(rawText: String): Pair<String, String>? {
@@ -1169,6 +1200,146 @@ class MainActivity : AppCompatActivity() {
         return bestPair
     }
 
+    data class KfiMatchRow(
+        val index: Int,
+        val type: String,
+        val manufacturer: String,
+        val formMaterial: String,
+        val detailUrl: String
+    )
+
+    data class KfiDetailInfo(
+        val type: String,
+        val manufacturer: String,
+        val formMaterial: String,
+        val officialApprovalNo: String,
+        val passDate: String
+    )
+
+    private fun parseKfiDetailPage(detailUrl: String, fallbackType: String, fallbackManuf: String, fallbackSpec: String): KfiDetailInfo {
+        if (detailUrl.isBlank()) {
+            return KfiDetailInfo(fallbackType, fallbackManuf, fallbackSpec, "공식 KFI 합격등록 완료", "")
+        }
+        try {
+            val doc = Jsoup.connect(detailUrl)
+                .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
+                .timeout(10_000)
+                .get()
+
+            var approvalNo = ""
+            var passDate = ""
+            var type = fallbackType
+            var manuf = fallbackManuf
+            var spec = fallbackSpec
+
+            val ths = doc.select("th")
+            for (th in ths) {
+                val label = th.text().trim()
+                val td = th.nextElementSibling()?.text()?.trim() ?: continue
+
+                if (label.contains("형식승인") || label.contains("성능인증") || label.contains("KFI인증") || label.contains("승인번호")) {
+                    approvalNo = td
+                } else if (label.contains("검정일자") || label.contains("합격일자")) {
+                    passDate = td
+                } else if (label.contains("종별")) {
+                    if (td.isNotBlank()) type = td
+                } else if (label.contains("제조") || label.contains("업체")) {
+                    if (td.isNotBlank()) manuf = td
+                } else if (label.contains("형식") || label.contains("소재") || label.contains("규격")) {
+                    if (td.isNotBlank()) spec = td
+                }
+            }
+
+            if (approvalNo.isBlank()) {
+                approvalNo = "공식 KFI 합격등록 완료"
+            }
+
+            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate)
+        } catch (e: Exception) {
+            Log.e("KFI", "Detail page parse error", e)
+            return KfiDetailInfo(fallbackType, fallbackManuf, fallbackSpec, "공식 KFI 합격등록 완료", "")
+        }
+    }
+
+    private fun processKfiMatchedItem(
+        row: KfiMatchRow,
+        letterCode: String,
+        numberCode: String
+    ) {
+        cameraExecutor.execute {
+            val detailInfo = parseKfiDetailPage(row.detailUrl, row.type, row.manufacturer, row.formMaterial)
+
+            val type = detailInfo.type
+            val manufacturer = detailInfo.manufacturer
+            val formMaterial = detailInfo.formMaterial
+            val officialApprovalNo = detailInfo.officialApprovalNo
+            val passDate = detailInfo.passDate
+
+            savedLetterCode = letterCode
+            savedNumberCode = numberCode
+
+            val db = AppDatabase.getDatabase(applicationContext)
+            val cancelList = kotlinx.coroutines.runBlocking { db.cancellationDao().getCancellationsByManufacturer(manufacturer) }
+            val matchedCancelEntity = cancelList.firstOrNull { c ->
+                val cancelNo = c.approvalNo.replace(Regex("[-\\s]"), "").uppercase()
+                val currentNo = officialApprovalNo.replace(Regex("[-\\s]"), "").uppercase()
+                cancelNo.isNotBlank() && currentNo.isNotBlank() && (currentNo.contains(cancelNo) || cancelNo.contains(currentNo))
+            }
+
+            val isCancelled = matchedCancelEntity != null
+            val judgmentHeader = if (isCancelled) {
+                "🚨 [종합 판정: 형식승인 취소 제품! (사유: ${matchedCancelEntity.reason})]"
+            } else {
+                "🟢 [종합 판정: 적합 (정상 인증 소방용품)]"
+            }
+
+            val summaryText = buildString {
+                appendLine(judgmentHeader)
+                appendLine("• 합격 표시: ${letterCode.uppercase()} $numberCode")
+                appendLine("• 형식승인번호: $officialApprovalNo")
+                if (passDate.isNotBlank()) {
+                    appendLine("• 검정합격일자: $passDate")
+                }
+                appendLine("• 종별: $type")
+                appendLine("• 제조업체: $manufacturer")
+                appendLine("• 형식 및 소재: $formMaterial")
+            }.trim()
+
+            // Room DB에 점검 이력 자동 저장
+            try {
+                val record = InspectionRecord(
+                    formatCode = "${letterCode.uppercase()} $numberCode",
+                    type = type,
+                    manufacturer = manufacturer,
+                    formMaterial = formMaterial,
+                    timestamp = System.currentTimeMillis()
+                )
+                kotlinx.coroutines.runBlocking {
+                    db.inspectionDao().insertRecord(record)
+                }
+            } catch (e: Exception) {
+                Log.e("DB", "이력 저장 실패", e)
+            }
+
+            val spokenText = if (isCancelled) {
+                "위조 또는 취소 경고. 본 제품은 형식승인 취소 이력이 있습니다."
+            } else {
+                "인증 검수 완료. 정상 인증된 소방용품입니다. 종별은 $type, 제조업체는 $manufacturer 입니다."
+            }
+
+            lastSpokenText = spokenText
+            if (::tts.isInitialized) {
+                tts.speak(spokenText, TextToSpeech.QUEUE_FLUSH, null, null)
+            }
+
+            runOnUiThread {
+                summaryCardTextView.text = summaryText
+            }
+
+            updatePricePositionUI(type, formMaterial)
+        }
+    }
+
     // ================= KFI 합격표시 조회(웹) =================
     private fun fetchKfiResult(letterCode: String, numberCode: String, isRetry: Boolean = false) {
         cameraExecutor.execute {
@@ -1194,24 +1365,43 @@ class MainActivity : AppCompatActivity() {
                     tx.contains("종별") && tx.contains("제조업체")
                 }
 
-                val rows = table?.select("tbody tr")
-                val firstDataRow = rows?.firstOrNull { r ->
-                    val td = r.select("td")
-                    td.size >= 3 && !r.text().contains("검색결과가 존재하지 않습니다")
+                val dataRows = mutableListOf<KfiMatchRow>()
+                val trElements = table?.select("tbody tr")
+                if (trElements != null) {
+                    var idx = 0
+                    for (r in trElements) {
+                        val tds = r.select("td")
+                        if (tds.size >= 3 && !r.text().contains("검색결과가 존재하지 않습니다")) {
+                            val rowType = tds.getOrNull(0)?.text()?.trim().orEmpty()
+                            val rowManuf = tds.getOrNull(1)?.text()?.trim().orEmpty()
+                            val rowSpec = tds.getOrNull(2)?.text()?.trim().orEmpty()
+
+                            val linkElem = tds.getOrNull(0)?.select("a")?.firstOrNull()
+                                ?: r.select("a").firstOrNull()
+                            val href = linkElem?.attr("abs:href").orEmpty()
+
+                            dataRows.add(
+                                KfiMatchRow(
+                                    index = idx++,
+                                    type = rowType,
+                                    manufacturer = rowManuf,
+                                    formMaterial = rowSpec,
+                                    detailUrl = href
+                                )
+                            )
+                        }
+                    }
                 }
 
-                if (firstDataRow == null && !isRetry) {
+                if (dataRows.isEmpty() && !isRetry) {
                     val swappedLetterCode = letterCode.drop(2) + letterCode.take(2)
                     Log.d("KFI", "Search failed with $letterCode. Retrying with swapped letters: $swappedLetterCode")
                     fetchKfiResult(swappedLetterCode, numberCode, isRetry = true)
                     return@execute
                 }
 
-                val summaryText: String
-                val spokenText: String
-
-                if (firstDataRow == null) {
-                    summaryText = buildString {
+                if (dataRows.isEmpty()) {
+                    val summaryText = buildString {
                         appendLine("🔴 [종합 판정: 미등록 제품 또는 불일치]")
                         appendLine("• 합격 표시: ${letterCode.uppercase()} $numberCode")
                         appendLine("• 형식승인번호: -")
@@ -1219,82 +1409,49 @@ class MainActivity : AppCompatActivity() {
                         appendLine("• (해당 합격표시가 미등록이거나 조회조건 불일치일 수 있습니다.)")
                     }.trim()
 
-                    spokenText = "해당 합격표시의 정보를 조회할 수 없습니다."
+                    val spokenText = "해당 합격표시의 정보를 조회할 수 없습니다."
+                    lastSpokenText = spokenText
+                    if (::tts.isInitialized) {
+                        tts.speak(spokenText, TextToSpeech.QUEUE_FLUSH, null, null)
+                    }
+
+                    runOnUiThread {
+                        kfiChipsHeaderTextView.visibility = View.GONE
+                        kfiChipsLayout.visibility = View.GONE
+                        summaryCardTextView.text = summaryText
+                    }
                 } else {
-                    val tds = firstDataRow.select("td")
-                    val type = tds.getOrNull(0)?.text()?.trim().orEmpty()
-                    val manufacturer = tds.getOrNull(1)?.text()?.trim().orEmpty()
-                    val formMaterial = tds.getOrNull(2)?.text()?.trim().orEmpty()
+                    runOnUiThread {
+                        if (dataRows.size > 1) {
+                            kfiChipsHeaderTextView.text = "⚠️ 본 합격표시로 ${dataRows.size}개의 KFI 등록 품목이 검색되었습니다. 점검 품목을 선택해 주세요:"
+                            kfiChipsHeaderTextView.visibility = View.VISIBLE
+                            kfiChipsLayout.visibility = View.VISIBLE
+                            kfiChipsLayout.removeAllViews()
 
-                    savedLetterCode = letterCode
-                    savedNumberCode = numberCode
-
-                    // DB에서 형식승인번호 매칭 및 해당 제품의 취소 이력 정밀 비교
-                    val db = AppDatabase.getDatabase(applicationContext)
-                    val officialApprovalNo = ApprovalMatcher.findOfficialApprovalNo(db, manufacturer, type, formMaterial)
-
-                    val cancelList = kotlinx.coroutines.runBlocking { db.cancellationDao().getCancellationsByManufacturer(manufacturer) }
-                    val matchedCancelEntity = cancelList.firstOrNull { c ->
-                        val cancelNo = c.approvalNo.replace(Regex("[-\\s]"), "").uppercase()
-                        val currentNo = officialApprovalNo.replace(Regex("[-\\s]"), "").uppercase()
-                        cancelNo.isNotBlank() && currentNo.isNotBlank() && (currentNo.contains(cancelNo) || cancelNo.contains(currentNo))
-                    }
-
-                    val judgmentHeader = if (matchedCancelEntity != null) {
-                        "🚨 [종합 판정: 형식승인 취소 제품! (사유: ${matchedCancelEntity.reason})]"
-                    } else {
-                        "🟢 [종합 판정: 적합 (정상 인증 소방용품)]"
-                    }
-                    val isCancelled = matchedCancelEntity != null
-
-                    summaryText = buildString {
-                        appendLine(judgmentHeader)
-                        appendLine("• 합격 표시: ${letterCode.uppercase()} $numberCode")
-                        appendLine("• 형식승인번호: $officialApprovalNo")
-                        appendLine("• 종별: $type")
-                        appendLine("• 제조업체: $manufacturer")
-                        appendLine("• 형식 및 소재: $formMaterial")
-                    }.trim()
-
-                    // Room DB에 점검 이력 자동 저장
-                    try {
-                        val record = InspectionRecord(
-                            formatCode = "${letterCode.uppercase()} $numberCode",
-                            type = type,
-                            manufacturer = manufacturer,
-                            formMaterial = formMaterial,
-                            timestamp = System.currentTimeMillis()
-                        )
-                        kotlinx.coroutines.runBlocking {
-                            db.inspectionDao().insertRecord(record)
+                            for (r in dataRows) {
+                                val chipButton = Button(this).apply {
+                                    text = "🔘 ${r.type} (${r.manufacturer})"
+                                    textSize = 14f
+                                    setPadding(dpToPx(12), dpToPx(6), dpToPx(12), dpToPx(6))
+                                    layoutParams = LinearLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.WRAP_CONTENT
+                                    ).apply {
+                                        bottomMargin = dpToPx(6)
+                                    }
+                                }
+                                chipButton.setOnClickListener {
+                                    processKfiMatchedItem(r, letterCode, numberCode)
+                                }
+                                kfiChipsLayout.addView(chipButton)
+                            }
+                        } else {
+                            kfiChipsHeaderTextView.visibility = View.GONE
+                            kfiChipsLayout.visibility = View.GONE
                         }
-                    } catch (e: Exception) {
-                        Log.e("DB", "이력 저장 실패", e)
                     }
 
-                    spokenText = if (isCancelled) {
-                        "위조 또는 취소 경고. 본 제품은 형식승인 취소 이력이 있습니다."
-                    } else {
-                        "인증 검수 완료. 정상 인증된 소방용품입니다. 종별은 $type, 제조업체는 $manufacturer 입니다."
-                    }
-                }
-
-                lastSpokenText = spokenText
-                if (::tts.isInitialized) {
-                    tts.speak(spokenText, TextToSpeech.QUEUE_FLUSH, null, null)
-                }
-
-                runOnUiThread {
-                    summaryCardTextView.text = summaryText
-                }
-
-                if (firstDataRow != null) {
-                    val tds = firstDataRow.select("td")
-                    val type = tds.getOrNull(0)?.text()?.trim().orEmpty()
-                    val formMaterial = tds.getOrNull(2)?.text()?.trim().orEmpty()
-                    if (type.isNotBlank()) {
-                        updatePricePositionUI(type, formMaterial)
-                    }
+                    processKfiMatchedItem(dataRows.first(), letterCode, numberCode)
                 }
 
             } catch (e: Exception) {
