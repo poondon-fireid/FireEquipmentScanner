@@ -1249,9 +1249,9 @@ class MainActivity : AppCompatActivity() {
         var passNumber = ""
 
         try {
-            // 개발자도구 스크린샷 주소창에서 확인된 KFI 정식 상세 전용 엔드포인트(opnPsmrkDtl.do) 직접 호출
+            // 크롬 주소창 스크린샷 100% 일치 파라미터 (mnfcSsnNo=&mnfcNo=&mnfcSn=&viewType=&checkPurpose=009003)
             val dtlUrl = if (inspRcptNo.isNotBlank()) {
-                "https://www.kfi.or.kr/portal/openData/openData/opnPsmrkDtl.do?searchGb=01&menuNo=500336&inspRcptNo=$inspRcptNo&ticWrtsCd=$ticWrtsCd&hisMode=Y&serMode=Y&checkPurpose=009003&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode"
+                "https://www.kfi.or.kr/portal/openData/openData/opnPsmrkDtl.do?searchGb=01&menuNo=500336&inspRcptNo=$inspRcptNo&ticWrtsCd=$ticWrtsCd&mnfcSsnNo=&mnfcNo=&mnfcSn=&viewType=&hisMode=Y&serMode=Y&checkPurpose=009003&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode"
             } else if (detailUrl.isNotBlank()) {
                 detailUrl.replace("opnPsmrk.do", "opnPsmrkDtl.do")
             } else ""
@@ -1259,13 +1259,17 @@ class MainActivity : AppCompatActivity() {
             if (dtlUrl.isNotBlank()) {
                 val doc = Jsoup.connect(dtlUrl)
                     .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .timeout(12_000)
+                    .timeout(15_000)
+                    .ignoreHttpErrors(true)
+                    .followRedirects(true)
                     .get()
 
                 val rows = doc.select("tr")
                 for (row in rows) {
-                    val label = row.select("th, td.lbl, td.th").text().trim()
-                    val value = row.select("td").lastOrNull()?.text()?.trim() ?: continue
+                    val label = row.select("th").text().replace("\u00a0", " ").trim()
+                    val value = row.select("td").text().replace("\u00a0", " ").trim()
+
+                    if (label.isBlank() || value.isBlank()) continue
 
                     if (label.contains("승인번호") || label.contains("형식승인") || label.contains("성능인증") || label.contains("KFI인증")) {
                         if (value.contains("/")) {
