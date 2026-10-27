@@ -1467,14 +1467,39 @@ class MainActivity : AppCompatActivity() {
                             var href = linkElem?.attr("abs:href").orEmpty()
 
                             val rawHtml = r.html() + " " + (linkElem?.outerHtml() ?: "") + " " + r.attr("onclick")
-                            val matches = Regex("['\"](\\d{6,8})['\"]").findAll(rawHtml).map { it.groupValues[1] }.toList()
+                            
+                            var rcptNo = ""
+                            var ticCd = ""
 
-                            val rcptNo = matches.getOrNull(0).orEmpty()
-                            val ticCd = matches.getOrNull(1).orEmpty()
+                            // 1. URL 쿼리 파라미터에서 inspRcptNo 직접 추출
+                            val rcptParamMatch = Regex("inspRcptNo=(\\d+)").find(rawHtml)
+                            if (rcptParamMatch != null) {
+                                rcptNo = rcptParamMatch.groupValues[1]
+                                val ticParamMatch = Regex("ticWrtsCd=(\\d+)").find(rawHtml)
+                                if (ticParamMatch != null) {
+                                    ticCd = ticParamMatch.groupValues[1]
+                                }
+                            }
+
+                            // 2. 자바스크립트 fn_detail('2301359', '01020101') 함수 호출 파싱
+                            if (rcptNo.isBlank()) {
+                                val fnMatch = Regex("fn_[a-zA-Z0-9_]+\\s*\\(\\s*['\"]?(\\d+)['\"]?\\s*,\\s*['\"]?(\\d+)['\"]?").find(rawHtml)
+                                if (fnMatch != null) {
+                                    rcptNo = fnMatch.groupValues[1]
+                                    ticCd = fnMatch.groupValues[2]
+                                }
+                            }
+
+                            // 3. 백업: menuNo(500336, 009004, 500183) 제외한 7자리 이상 수식 추출
+                            if (rcptNo.isBlank()) {
+                                val allDigits = Regex("['\"](\\d{7,8})['\"]").findAll(rawHtml).map { it.groupValues[1] }.filter { it != "500336" && it != "009004" && it != "500183" }.toList()
+                                rcptNo = allDigits.getOrNull(0).orEmpty()
+                                ticCd = allDigits.getOrNull(1).orEmpty()
+                            }
 
                             if (href.isBlank() || href.contains("javascript")) {
                                 if (rcptNo.isNotBlank()) {
-                                    href = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?searchGb=01&menuNo=500336&checkPurpose=009004&hisMode=Y&serMode=Y&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode&inspRcptNo=$rcptNo&ticWrtsCd=$ticCd"
+                                    href = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrkDtl.do?searchGb=01&menuNo=500336&checkPurpose=009003&hisMode=Y&serMode=Y&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode&inspRcptNo=$rcptNo&ticWrtsCd=$ticCd"
                                 }
                             }
 
