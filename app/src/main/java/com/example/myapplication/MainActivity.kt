@@ -1307,20 +1307,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // KFI 웹상세 파싱 성공 시 무조건 웹상세의 형식승인번호를 그대로 100% 인용 사용!
-        if (approvalNo.isNotBlank() && approvalNo != "-") {
-            return KfiDetailInfo(type, manuf, spec, approvalNo, passDate, inspectKind, rcptInfo, inspectorInfo, lotNumber, inspectQty, finalJudgment, passNumber)
-        }
-
-        // 파싱 실패/비어있는 예외 상황에서만 로컬 DB 비상 백업 사용
-        try {
-            val db = AppDatabase.getDatabase(applicationContext)
-            val fallbackApproval = ApprovalMatcher.findOfficialApprovalNo(db, manuf, type, spec)
-            if (fallbackApproval.isNotBlank() && !fallbackApproval.contains("매칭 데이터 없음")) {
-                approvalNo = fallbackApproval
-            }
-        } catch (_: Exception) {}
-
-        if (approvalNo.isBlank()) {
+        if (approvalNo.isBlank() || approvalNo == "-") {
             approvalNo = "공식 KFI 합격등록 완료"
         }
 
@@ -1433,11 +1420,11 @@ class MainActivity : AppCompatActivity() {
                 val url = "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do"
 
                 val doc = Jsoup.connect(url)
-                    .userAgent("Mozilla/5.0 (Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari")
+                    .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
                     .timeout(15_000)
                     .data("searchGb", "01")
                     .data("menuNo", "500336")
-                    .data("checkPurpose", "009004")
+                    .data("checkPurpose", "009003")
                     .data("prfc", letterCode.lowercase())
                     .data("psmrkNo", numberCode)
                     .data("serMode", "Y")
