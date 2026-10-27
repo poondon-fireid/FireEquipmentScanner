@@ -1249,24 +1249,32 @@ class MainActivity : AppCompatActivity() {
         var passNumber = ""
 
         try {
-            // 크롬 주소창 스크린샷 100% 일치 파라미터 (mnfcSsnNo=&mnfcNo=&mnfcSn=&viewType=&checkPurpose=009003)
-            val dtlUrl = if (inspRcptNo.isNotBlank()) {
-                "https://www.kfi.or.kr/portal/openData/openData/opnPsmrkDtl.do?searchGb=01&menuNo=500336&inspRcptNo=$inspRcptNo&ticWrtsCd=$ticWrtsCd&mnfcSsnNo=&mnfcNo=&mnfcSn=&viewType=&hisMode=Y&serMode=Y&checkPurpose=009003&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode"
+            // 1. KFI 세션 쿠키 획득 (메인 검색 페이지 세션 생성)
+            val baseConn = Jsoup.connect("https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?menuNo=500336")
+                .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+                .timeout(10_000)
+                .execute()
+
+            val cookies = baseConn.cookies()
+
+            // 2. 쿠키 및 리퍼러 헤더를 포함하여 상세 페이지 접속
+            val targetUrl = if (inspRcptNo.isNotBlank()) {
+                "https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?menuNo=500336&inspRcptNo=$inspRcptNo&ticWrtsCd=$ticWrtsCd&checkPurpose=009003&prfc=${letterCode.lowercase()}&psmrkNo=$numberCode&pageUnit=5&pageIndex=1"
             } else if (detailUrl.isNotBlank()) {
-                detailUrl.replace("opnPsmrk.do", "opnPsmrkDtl.do")
+                detailUrl
             } else ""
 
-            if (dtlUrl.isNotBlank()) {
-                val doc = Jsoup.connect(dtlUrl)
+            if (targetUrl.isNotBlank()) {
+                val doc = Jsoup.connect(targetUrl)
+                    .cookies(cookies)
+                    .referrer("https://www.kfi.or.kr/portal/openData/openData/opnPsmrk.do?menuNo=500336")
                     .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-                    .timeout(15_000)
-                    .ignoreHttpErrors(true)
-                    .followRedirects(true)
+                    .timeout(12_000)
                     .get()
 
                 val rows = doc.select("tr")
                 for (row in rows) {
-                    val label = row.select("th").text().replace("\u00a0", " ").trim()
+                    val label = row.select("th.th-2, th").text().replace("\u00a0", " ").trim()
                     val value = row.select("td").text().replace("\u00a0", " ").trim()
 
                     if (label.isBlank() || value.isBlank()) continue
@@ -1307,10 +1315,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         } catch (e: Exception) {
-            Log.e("KFI", "Detail page Dtl.do parse error", e)
+            Log.e("KFI", "Detail page cookie parse error", e)
         }
 
-        // KFI 웹상세 파싱 성공 시 무조건 웹상세의 형식승인번호를 그대로 100% 인용 사용!
         if (approvalNo.isBlank() || approvalNo == "-") {
             approvalNo = "공식 KFI 합격등록 완료"
         }
